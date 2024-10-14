@@ -85,7 +85,7 @@ Command outputs information on all processes similar to "ps -efL" command
             pid = int(task["pid"])
             KdumpGdbserverKernelPs.print_ps(task, pid)
             # needs to walk all threads for this pid if any
-            for ctask in KdumpGdbserverBase.kernellist(task["thread_group"], "thread_group", init_task.type):
+            for ctask in KdumpGdbserverBase.kernellist(task["signal"]["thread_head"], "thread_node", init_task.type, include_first=False):
                 KdumpGdbserverKernelPs.print_ps(ctask, pid)
 
 
@@ -127,7 +127,7 @@ usage: kdump-save-process-json <filename> <pid>"""
         for task in KdumpGdbserverBase.kernellist(init_task["tasks"], "tasks", init_task.type, include_first=True):
             if int(task['pid']) == tpid:
                 return task
-            for ctask in KdumpGdbserverBase.kernellist(task["thread_group"], "thread_group", init_task.type):
+            for ctask in KdumpGdbserverBase.kernellist(task["signal"]["thread_head"], "thread_node", init_task.type):
                 if int(ctask['pid']) == tpid:
                     # note returns leading task, not the one that matches requested pid
                     return task
@@ -236,9 +236,10 @@ usage: kdump-save-process-json <filename> <pid>"""
             loadaddr = int(KdumpGdbserverMakeProcessJson.get_first_exec_addr(task))
             threads = []
             task_type = gdb.parse_and_eval("init_task").type
-            for ctask in KdumpGdbserverBase.kernellist(task["thread_group"], "thread_group", task_type, include_first=True):
+            for ctask in KdumpGdbserverBase.kernellist(task["signal"]["thread_head"], "thread_node", init_task.type, include_first=True):
                 regs = thread_reg_func(ctask)
                 threads = KdumpGdbserverBase.get_thread_info(ctask, pid, regs, threads)
+            print(f"threads={threads}")
             KdumpGdbserverMakeProcessJson.write_to_json(rootpgt, threads, loadaddr, filename)
 
 
@@ -331,10 +332,16 @@ usage: kdump-save-kernel-json <filename>"""
         task_type = init_task.type
         for task in KdumpGdbserverBase.kernellist(init_task["tasks"], "tasks", task_type, include_first=True):
             pid = int(task["pid"])
-            for ctask in KdumpGdbserverBase.kernellist(task["thread_group"], "thread_group", task_type,
-                                                       include_first=True):
-                regs = thread_reg_func(ctask)
-                threads = KdumpGdbserverBase.get_thread_info(ctask, pid, regs, threads)
+            for ctask in KdumpGdbserverBase.kernellist(task["signal"]["thread_head"], "thread_node", init_task.type):
+                try:
+                    regs = thread_reg_func(ctask)
+                    threads = KdumpGdbserverBase.get_thread_info(ctask, pid, regs, threads)
+                except gdb.MemoryError:
+                    # For some reason it only fails reading a memory address on this single task PID 1360 in my test core. need to figure that out later.
+                    # Python Exception <class 'gdb.MemoryError'>: Cannot access memory at address 0xffffaf7242d03af0
+                    # Error occurred in Python: Cannot access memory at address 0xffffaf7242d03af0
+                    print(f"thread_reg_func({ctask['pid']}): MemoryError")
+                    continue
         KdumpGdbserverMakeKernelJson.write_to_json(threads, filename)
 
 
